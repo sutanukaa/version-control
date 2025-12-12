@@ -7,6 +7,8 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
 
@@ -136,6 +138,69 @@ public class Main {
         } catch (IOException e) {
           throw new RuntimeException(e);
         } catch (NoSuchAlgorithmException e) {
+          throw new RuntimeException(e);
+        }
+        break;
+      }
+      
+      case "ls-tree": {
+        // args[1] is "--name-only" (we only print names)
+        // args[2] is the tree hash (like "abc123...")
+        String treeHash = args[2];
+        
+        // Step 1: Build the path to the tree object file
+        String folderName = treeHash.substring(0, 2);
+        String fileName = treeHash.substring(2);
+        File treeFile = new File(".git/objects/" + folderName + "/" + fileName);
+        
+        try {
+          // Step 2: Read and decompress the file
+          FileInputStream fileStream = new FileInputStream(treeFile);
+          InflaterInputStream decompressStream = new InflaterInputStream(fileStream);
+          byte[] decompressedData = readAllBytes(decompressStream);
+          decompressStream.close();
+          
+          // Step 3: Skip the header ("tree <size>\0")
+          // Find the first null byte to skip past the header
+          int position = 0;
+          while (decompressedData[position] != 0) {
+            position++;
+          }
+          position++;  // Move past the null byte
+          
+          // Step 4: Parse each entry in the tree
+          // Format: <mode> <name>\0<20-byte-sha>
+          List<String> names = new ArrayList<String>();
+          
+          while (position < decompressedData.length) {
+            // Read the mode (like "100644" or "40000")
+            // Mode ends with a space
+            int modeStart = position;
+            while (decompressedData[position] != ' ') {
+              position++;
+            }
+            // String mode = new String(decompressedData, modeStart, position - modeStart);
+            position++;  // Skip the space
+            
+            // Read the name (ends with null byte)
+            int nameStart = position;
+            while (decompressedData[position] != 0) {
+              position++;
+            }
+            String name = new String(decompressedData, nameStart, position - nameStart);
+            names.add(name);
+            position++;  // Skip the null byte
+            
+            // Skip the 20-byte SHA-1 hash (we don't need it for --name-only)
+            position += 20;
+          }
+          
+          // Step 5: Print each name on a new line
+          for (String name : names) {
+            System.out.println(name);
+          }
+          
+        } catch (IOException e) {
           throw new RuntimeException(e);
         }
         break;
