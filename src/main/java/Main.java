@@ -221,6 +221,30 @@ public class Main {
         break;
       }
       
+      case "commit-tree": {
+        // Usage: commit-tree <tree_sha> -p <parent_sha> -m <message>
+        // args[0] = "commit-tree"
+        // args[1] = tree SHA
+        // args[2] = "-p"
+        // args[3] = parent SHA
+        // args[4] = "-m"
+        // args[5] = message
+        
+        String treeSha = args[1];
+        String parentSha = args[3];
+        String message = args[5];
+        
+        try {
+          String commitHash = createCommit(treeSha, parentSha, message);
+          System.out.println(commitHash);
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        } catch (NoSuchAlgorithmException e) {
+          throw new RuntimeException(e);
+        }
+        break;
+      }
+      
       default:
         System.out.println("Unknown command: " + command);
         break;
@@ -228,6 +252,56 @@ public class Main {
   }
   
   // ============ HELPER METHODS ============
+  
+  /**
+   * Creates a commit object and writes it to .git/objects.
+   * Returns the 40-character SHA-1 hash.
+   */
+  private static String createCommit(String treeSha, String parentSha, String message) 
+      throws IOException, NoSuchAlgorithmException {
+    
+    // Build the commit content (the part after the header)
+    // Format:
+    // tree <tree_sha>\n
+    // parent <parent_sha>\n
+    // author <name> <<email>> <timestamp> <timezone>\n
+    // committer <name> <<email>> <timestamp> <timezone>\n
+    // \n
+    // <message>\n
+    
+    StringBuilder content = new StringBuilder();
+    content.append("tree ").append(treeSha).append("\n");
+    content.append("parent ").append(parentSha).append("\n");
+    
+    // Use current timestamp (seconds since epoch)
+    long timestamp = System.currentTimeMillis() / 1000;
+    String authorInfo = "John Doe <john@example.com> " + timestamp + " +0000";
+    
+    content.append("author ").append(authorInfo).append("\n");
+    content.append("committer ").append(authorInfo).append("\n");
+    content.append("\n");  // Blank line before message
+    content.append(message).append("\n");
+    
+    // Create the full object with header
+    byte[] contentBytes = content.toString().getBytes();
+    String header = "commit " + contentBytes.length + "\0";
+    byte[] headerBytes = header.getBytes();
+    
+    // Combine header + content
+    byte[] fullObject = new byte[headerBytes.length + contentBytes.length];
+    System.arraycopy(headerBytes, 0, fullObject, 0, headerBytes.length);
+    System.arraycopy(contentBytes, 0, fullObject, headerBytes.length, contentBytes.length);
+    
+    // Calculate SHA-1 hash
+    MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+    byte[] hashBytes = sha1.digest(fullObject);
+    String hash = bytesToHexString(hashBytes);
+    
+    // Write to .git/objects
+    writeObject(hash, fullObject);
+    
+    return hash;
+  }
   
   /**
    * Recursively writes a directory as a tree object.
