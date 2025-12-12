@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
@@ -206,10 +208,171 @@ public class Main {
         break;
       }
       
+      case "write-tree": {
+        // Write the current directory as a tree object
+        try {
+          String treeHash = writeTree(new File("."));
+          System.out.println(treeHash);
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        } catch (NoSuchAlgorithmException e) {
+          throw new RuntimeException(e);
+        }
+        break;
+      }
+      
       default:
         System.out.println("Unknown command: " + command);
         break;
     }
+  }
+  
+  // ============ HELPER METHODS ============
+  
+  /**
+   * Recursively writes a directory as a tree object.
+   * Returns the 40-character SHA-1 hash of the tree.
+   */
+  private static String writeTree(File directory) throws IOException, NoSuchAlgorithmException {
+    // Get all files and folders in this directory
+    File[] entries = directory.listFiles();
+    
+    if (entries == null) {
+      entries = new File[0];
+    }
+    
+    // Sort entries alphabetically by name (Git requires this!)
+    Arrays.sort(entries, new Comparator<File>() {
+      public int compare(File a, File b) {
+        return a.getName().compareTo(b.getName());
+      }
+    });
+    
+    // Build the tree content (without header)
+    ByteArrayOutputStream treeContent = new ByteArrayOutputStream();
+    
+    for (File entry : entries) {
+      String name = entry.getName();
+      
+      // Skip the .git directory!
+      if (name.equals(".git")) {
+        continue;
+      }
+      
+      String mode;
+      byte[] shaBytes;
+      
+      if (entry.isFile()) {
+        // It's a file - create a blob and get its hash
+        mode = "100644";  // Regular file mode
+        String blobHash = writeBlob(entry);
+        shaBytes = hexStringToBytes(blobHash);
+      } else if (entry.isDirectory()) {
+        // It's a directory - recursively create a tree
+        mode = "40000";  // Directory mode (NOT 040000!)
+        String subTreeHash = writeTree(entry);
+        shaBytes = hexStringToBytes(subTreeHash);
+      } else {
+        // Skip special files
+        continue;
+      }
+      
+      // Write entry: <mode> <name>\0<20-byte-sha>
+      treeContent.write((mode + " " + name).getBytes());
+      treeContent.write(0);  // Null byte
+      treeContent.write(shaBytes);  // 20 bytes of SHA
+    }
+    
+    // Now create the full tree object with header
+    byte[] content = treeContent.toByteArray();
+    String header = "tree " + content.length + "\0";
+    byte[] headerBytes = header.getBytes();
+    
+    // Combine header + content
+    byte[] fullObject = new byte[headerBytes.length + content.length];
+    System.arraycopy(headerBytes, 0, fullObject, 0, headerBytes.length);
+    System.arraycopy(content, 0, fullObject, headerBytes.length, content.length);
+    
+    // Calculate SHA-1 hash
+    MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+    byte[] hashBytes = sha1.digest(fullObject);
+    String hash = bytesToHexString(hashBytes);
+    
+    // Write to .git/objects
+    writeObject(hash, fullObject);
+    
+    return hash;
+  }
+  
+  /**
+   * Creates a blob object from a file and writes it to .git/objects.
+   * Returns the 40-character SHA-1 hash.
+   */
+  private static String writeBlob(File file) throws IOException, NoSuchAlgorithmException {
+    // Read file content
+    byte[] fileContent = Files.readAllBytes(file.toPath());
+    
+    // Create header
+    String header = "blob " + fileContent.length + "\0";
+    byte[] headerBytes = header.getBytes();
+    
+    // Combine header + content
+    byte[] fullObject = new byte[headerBytes.length + fileContent.length];
+    System.arraycopy(headerBytes, 0, fullObject, 0, headerBytes.length);
+    System.arraycopy(fileContent, 0, fullObject, headerBytes.length, fileContent.length);
+    
+    // Calculate SHA-1 hash
+    MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+    byte[] hashBytes = sha1.digest(fullObject);
+    String hash = bytesToHexString(hashBytes);
+    
+    // Write to .git/objects
+    writeObject(hash, fullObject);
+    
+    return hash;
+  }
+  
+  /**
+   * Writes an object to .git/objects/<first2chars>/<rest>
+   */
+  private static void writeObject(String hash, byte[] data) throws IOException {
+    String folderName = hash.substring(0, 2);
+    String fileName = hash.substring(2);
+    
+    File objectFolder = new File(".git/objects/" + folderName);
+    objectFolder.mkdirs();
+    
+    File objectFile = new File(objectFolder, fileName);
+    
+    // Compress and write
+    FileOutputStream fos = new FileOutputStream(objectFile);
+    DeflaterOutputStream dos = new DeflaterOutputStream(fos);
+    dos.write(data);
+    dos.close();
+  }
+  
+  /**
+   * Converts a byte array to a hex string.
+   * Example: [0x3b, 0x18] -> "3b18"
+   */
+  private static String bytesToHexString(byte[] bytes) {
+    StringBuilder sb = new StringBuilder();
+    for (byte b : bytes) {
+      sb.append(String.format("%02x", b));
+    }
+    return sb.toString();
+  }
+  
+  /**
+   * Converts a hex string to a byte array.
+   * Example: "3b18" -> [0x3b, 0x18]
+   */
+  private static byte[] hexStringToBytes(String hex) {
+    byte[] bytes = new byte[hex.length() / 2];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
   }
   
   // Helper method to read all bytes from an InputStream (Java 8 compatible)
